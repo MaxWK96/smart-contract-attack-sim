@@ -1,0 +1,36 @@
+{
+  "name": "smart-contract-attack-sim",
+  "version": "0.1.0",
+  "description": "CLI tool that analyzes Solidity smart contracts for vulnerabilities and generates executable attack simulations",
+  "main": "dist/cli.js",
+  "bin": {
+    "attack-sim": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "ts-node src/cli.ts",
+    "analyze": "ts-node src/cli.ts analyze"
+  },
+  "keywords": [
+    "solidity",
+    "smart-contracts",
+    "security",
+    "vulnerability",
+    "exploit",
+    "foundry"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@solidity-parser/parser": "^0.18.0",
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "ora": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.2"
+  }
+}

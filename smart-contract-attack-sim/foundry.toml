@@ -1,0 +1,16 @@
+[profile.default]
+src = "samples"
+out = "out"
+libs = ["lib"]
+test = "test"
+
+# Allow remappings
+remappings = [
+    "forge-std/=lib/forge-std/src/"
+]
+
+# Increase gas limit for reentrancy tests
+gas_limit = 30000000
+
+# Verbosity for tests
+verbosity = 2
