@@ -9,6 +9,9 @@ out/
 cache/
 foundry.lock
 
+# Test coverage
+coverage/
+
 # IDE
 .vscode/
 .idea/

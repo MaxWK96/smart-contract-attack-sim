@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs';
+import chalk from 'chalk';
 import {
   printBanner,
   printAnalyzing,
@@ -22,17 +23,51 @@ const program = new Command();
 program
   .name('attack-sim')
   .description('Smart Contract Attack Simulator - Vulnerability Detection & Exploit Generation')
-  .version('0.1.0');
+  .version('0.1.0')
+  .addHelpText('after', `
+${chalk.cyan('Examples:')}
+  $ attack-sim analyze MyContract.sol
+  $ attack-sim analyze MyContract.sol --format json > report.json
+  $ attack-sim analyze MyContract.sol --min-severity HIGH
+  $ attack-sim analyze MyContract.sol --no-exploits
+  $ attack-sim init
+
+${chalk.cyan('Exit Codes:')}
+  0  No vulnerabilities found
+  1  Low severity vulnerabilities found
+  2  Medium severity vulnerabilities found
+  3  High severity vulnerabilities found
+  4  Critical severity vulnerabilities found
+
+${chalk.cyan('Vulnerability Types Detected:')}
+  - Reentrancy attacks (CRITICAL)
+  - Missing access control (HIGH)
+  - Integer overflow/underflow (HIGH)
+  - Unprotected selfdestruct (CRITICAL)
+  - Unchecked external calls (MEDIUM)
+
+${chalk.cyan('More Info:')}
+  GitHub: https://github.com/MaxWK96/smart-contract-attack-sim
+`);
 
 program
   .command('analyze')
-  .description('Analyze a Solidity contract for vulnerabilities')
-  .argument('<file>', 'Path to Solidity file')
-  .option('-o, --output <dir>', 'Output directory for exploit proofs', './test/exploits')
-  .option('-f, --format <format>', 'Output format (terminal|json)', 'terminal')
-  .option('--no-exploits', 'Skip exploit generation')
-  .option('-v, --verbose', 'Verbose output')
-  .option('--min-severity <severity>', 'Minimum severity to report (CRITICAL|HIGH|MEDIUM|LOW)', 'LOW')
+  .description('Analyze a Solidity contract for vulnerabilities and generate exploit proofs')
+  .argument('<file>', 'Path to Solidity file (.sol)')
+  .option('-o, --output <dir>', 'Output directory for generated exploit tests', './test/exploits')
+  .option('-f, --format <format>', 'Output format: terminal (colored) or json (for CI/CD)', 'terminal')
+  .option('--no-exploits', 'Skip generating Foundry exploit test files')
+  .option('-v, --verbose', 'Show detailed error messages and stack traces')
+  .option('--min-severity <level>', 'Minimum severity to report: CRITICAL, HIGH, MEDIUM, or LOW', 'LOW')
+  .addHelpText('after', `
+${chalk.cyan('Examples:')}
+  $ attack-sim analyze contracts/Vault.sol
+  $ attack-sim analyze contracts/Vault.sol -f json > report.json
+  $ attack-sim analyze contracts/Vault.sol --min-severity HIGH --no-exploits
+
+${chalk.cyan('After Analysis:')}
+  Run generated exploit tests with: ${chalk.yellow('forge test --match-test Exploit')}
+`)
   .action(async (file: string, options) => {
     try {
       // Resolve the file path
@@ -104,10 +139,17 @@ program
         printSummary(report);
       }
 
-      // Exit with error code if critical/high vulnerabilities found
-      if (report.summary.critical > 0 || report.summary.high > 0) {
-        process.exit(1);
+      // Exit with appropriate code based on severity
+      if (report.summary.critical > 0) {
+        process.exit(4); // Critical vulnerabilities found
+      } else if (report.summary.high > 0) {
+        process.exit(3); // High severity found
+      } else if (report.summary.medium > 0) {
+        process.exit(2); // Medium severity found
+      } else if (report.summary.low > 0) {
+        process.exit(1); // Low severity found
       }
+      // Exit 0 = no vulnerabilities
 
     } catch (error: any) {
       printError(error.message);
@@ -120,7 +162,19 @@ program
 
 program
   .command('init')
-  .description('Initialize Foundry project structure for exploit testing')
+  .description('Initialize Foundry project structure for running exploit tests')
+  .addHelpText('after', `
+${chalk.cyan('This command creates:')}
+  - test/exploits/  Directory for generated exploit tests
+  - src/            Directory for your contracts
+  - lib/            Directory for dependencies
+  - foundry.toml    Foundry configuration file
+
+${chalk.cyan('After init, run:')}
+  $ forge install foundry-rs/forge-std
+  $ attack-sim analyze src/YourContract.sol
+  $ forge test
+`)
   .action(() => {
     printBanner();
 
