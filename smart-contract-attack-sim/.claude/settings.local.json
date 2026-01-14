@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run build)",
+      "Bash(node:*)",
+      "Bash(forge:*)",
+      "Bash(curl:*)",
+      "Bash(bash:*)",
+      "Bash(source ~/.bashrc)",
+      "Bash(foundryup:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(gh repo create:*)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "Bash(npm test)",
+      "Bash(git add:*)",
+      "Bash(npx create-next-app@latest web --typescript --tailwind --eslint --app --src-dir --no-import-alias --use-npm)",
+      "Bash(npm run dev:*)"
+    ]
+  }
+}
