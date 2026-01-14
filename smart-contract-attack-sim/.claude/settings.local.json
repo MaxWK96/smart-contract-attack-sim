@@ -17,7 +17,11 @@
       "Bash(npm test)",
       "Bash(git add:*)",
       "Bash(npx create-next-app@latest web --typescript --tailwind --eslint --app --src-dir --no-import-alias --use-npm)",
-      "Bash(npm run dev:*)"
+      "Bash(npm run dev:*)",
+      "Bash(npx vercel --yes)",
+      "Bash(npx vercel:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(echo:*)"
     ]
   }
 }
