@@ -21,7 +21,8 @@
       "Bash(npx vercel --yes)",
       "Bash(npx vercel:*)",
       "Bash(git rev-parse:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(git ls-tree:*)"
     ]
   }
 }

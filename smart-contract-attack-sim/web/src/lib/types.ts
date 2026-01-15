@@ -1,10 +1,19 @@
 export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
+export type ConfidenceLevel = 'confirmed' | 'likely' | 'theoretical';
+
 export interface VulnerabilityLocation {
   line: number;
   column: number;
   functionName?: string;
   contractName?: string;
+}
+
+export interface VulnerabilityMetadata {
+  environment: string;
+  assumptions: string[];
+  preconditions: string[];
+  protectivePatterns: string[];
 }
 
 export interface Vulnerability {
@@ -17,6 +26,10 @@ export interface Vulnerability {
   attackVector: string;
   recommendation: string;
   exploitable: boolean;
+  confidence: ConfidenceLevel;
+  confidenceScore: number;
+  confidenceFactors: string[];
+  metadata: VulnerabilityMetadata;
 }
 
 export type VulnerabilityType =
@@ -26,6 +39,19 @@ export type VulnerabilityType =
   | 'unprotected-selfdestruct'
   | 'access-control'
   | 'unchecked-call';
+
+export interface SafetyCheck {
+  category: string;
+  pattern: string;
+  status: 'safe' | 'vulnerable' | 'not_applicable';
+  reason: string;
+}
+
+export interface AnalysisLimitations {
+  covered: string[];
+  notCovered: string[];
+  disclaimer: string;
+}
 
 export interface AnalysisResult {
   contractName: string;
@@ -39,6 +65,8 @@ export interface AnalysisResult {
     low: number;
     total: number;
   };
+  safetyChecks: SafetyCheck[];
+  limitations: AnalysisLimitations;
 }
 
 export interface ContractInfo {

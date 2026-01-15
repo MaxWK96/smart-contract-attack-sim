@@ -9,7 +9,43 @@ import {
   Vulnerability,
   VulnerabilityType,
   AnalysisResult,
+  ConfidenceLevel,
+  VulnerabilityMetadata,
+  SafetyCheck,
+  AnalysisLimitations,
 } from './types';
+
+// ============= CONFIDENCE SCORING =============
+
+function scoreToConfidenceLevel(score: number): ConfidenceLevel {
+  if (score >= 70) return 'confirmed';
+  if (score >= 40) return 'likely';
+  return 'theoretical';
+}
+
+// Static limitations that apply to all analyses
+const ANALYSIS_LIMITATIONS: AnalysisLimitations = {
+  covered: [
+    'Reentrancy via external calls (.call, .send, .delegatecall)',
+    'Missing access control on sensitive functions',
+    'Integer overflow/underflow (Solidity < 0.8.0)',
+    'Unprotected selfdestruct calls',
+  ],
+  notCovered: [
+    'Governance attacks (malicious proposals)',
+    'Social engineering (phishing, key theft)',
+    'Oracle manipulation (off-chain data feeds)',
+    'Flash loan attacks',
+    'Front-running / MEV attacks',
+    'Time-based attacks (timestamp manipulation)',
+    'Malicious proxy upgrades',
+    'Business logic flaws',
+    'Economic attacks requiring market conditions',
+    'Cross-contract vulnerabilities',
+    'Off-chain dependencies',
+  ],
+  disclaimer: 'This tool performs static pattern analysis only. For comprehensive security, a professional audit is required. This tool is ONE layer of defense, not a complete security solution.',
+};
 
 // ============= PARSER =============
 
@@ -295,6 +331,7 @@ function findStateChanges(body: unknown): StateChangeInfo[] {
 
 function detectReentrancy(contract: ContractInfo): Vulnerability[] {
   const vulnerabilities: Vulnerability[] = [];
+  const reentrancyGuardModifiers = ['nonReentrant', 'noReentrant', 'reentrancyGuard'];
 
   for (const func of contract.functions) {
     if (!func.body) continue;
@@ -303,12 +340,64 @@ function detectReentrancy(contract: ContractInfo): Vulnerability[] {
     const externalCalls = findExternalCalls(func.body);
     const stateChanges = findStateChanges(func.body);
 
+    // Check for reentrancy guard modifier
+    const hasReentrancyGuard = func.modifiers.some((mod) =>
+      reentrancyGuardModifiers.some((guard) => mod.toLowerCase().includes(guard.toLowerCase()))
+    );
+
     for (const call of externalCalls) {
       if (!['call', 'send', 'delegatecall'].includes(call.type)) continue;
 
       const stateChangesAfterCall = stateChanges.filter((sc) => sc.line > call.line);
 
       if (stateChangesAfterCall.length > 0) {
+        // Calculate confidence score
+        const confidenceFactors: string[] = [];
+        let score = 20; // Base score
+
+        // External call before state update is the key pattern
+        score += 40;
+        confidenceFactors.push('External call occurs before state update (+40)');
+
+        // No reentrancy guard increases confidence
+        if (!hasReentrancyGuard) {
+          score += 20;
+          confidenceFactors.push('No reentrancy guard modifier found (+20)');
+        } else {
+          score -= 30;
+          confidenceFactors.push('Reentrancy guard modifier present (-30)');
+        }
+
+        // Balance-related state changes increase confidence
+        const varName = stateChangesAfterCall[0].variableName.toLowerCase();
+        if (varName.includes('balance') || varName.includes('amount') || varName.includes('fund')) {
+          score += 20;
+          confidenceFactors.push('State variable appears balance-related (+20)');
+        }
+
+        // .call is more dangerous than .send or .transfer
+        if (call.type === 'call') {
+          score += 10;
+          confidenceFactors.push('Uses .call() which forwards all gas (+10)');
+        }
+
+        const metadata: VulnerabilityMetadata = {
+          environment: 'Any EVM-compatible chain',
+          assumptions: [
+            'Attacker can deploy a malicious contract',
+            'Target function is externally callable',
+            'Contract has sufficient balance to exploit',
+          ],
+          preconditions: [
+            `Function ${func.name}() is ${func.visibility}`,
+            'Attacker needs initial funds for deposit (if required)',
+            'No external reentrancy protection in place',
+          ],
+          protectivePatterns: hasReentrancyGuard
+            ? ['ReentrancyGuard modifier detected']
+            : ['No reentrancy protection detected'],
+        };
+
         vulnerabilities.push({
           id: generateId('reentrancy'),
           type: 'reentrancy',
@@ -325,6 +414,10 @@ function detectReentrancy(contract: ContractInfo): Vulnerability[] {
           recommendation:
             'Apply the Checks-Effects-Interactions pattern: update state variables before making external calls. Consider using ReentrancyGuard from OpenZeppelin.',
           exploitable: true,
+          confidence: scoreToConfidenceLevel(score),
+          confidenceScore: Math.min(100, Math.max(0, score)),
+          confidenceFactors,
+          metadata,
         });
       }
     }
@@ -415,8 +508,8 @@ function detectAccessControl(contract: ContractInfo): Vulnerability[] {
     if (func.visibility === 'private' || func.visibility === 'internal') continue;
     if (['constructor', 'fallback', 'receive'].includes(func.name)) continue;
 
-    const isSensitive = sensitivePatterns.some((p) => func.name.toLowerCase().includes(p.toLowerCase()));
-    if (!isSensitive) continue;
+    const matchedPattern = sensitivePatterns.find((p) => func.name.toLowerCase().includes(p.toLowerCase()));
+    if (!matchedPattern) continue;
 
     const hasAccessControl = func.modifiers.some((mod) =>
       accessControlModifiers.some((ac) => mod.toLowerCase().includes(ac.toLowerCase()))
@@ -424,6 +517,43 @@ function detectAccessControl(contract: ContractInfo): Vulnerability[] {
     const hasRequireSender = checkForMsgSenderRequire(func.body);
 
     if (!hasAccessControl && !hasRequireSender) {
+      // Calculate confidence score
+      const confidenceFactors: string[] = [];
+      let score = 20; // Base score
+
+      // Sensitive function name pattern
+      score += 30;
+      confidenceFactors.push(`Function name matches sensitive pattern "${matchedPattern}" (+30)`);
+
+      // No access control modifier
+      score += 30;
+      confidenceFactors.push('No access control modifier found (+30)');
+
+      // No msg.sender require check
+      score += 20;
+      confidenceFactors.push('No msg.sender validation in function body (+20)');
+
+      // External visibility is more dangerous
+      if (func.visibility === 'external') {
+        score += 10;
+        confidenceFactors.push('Function is external (more exposed) (+10)');
+      }
+
+      const metadata: VulnerabilityMetadata = {
+        environment: 'Any EVM-compatible chain',
+        assumptions: [
+          'Function performs a privileged operation',
+          'No off-chain access control mechanism exists',
+          'Contract is deployed and accessible',
+        ],
+        preconditions: [
+          `Function ${func.name}() is ${func.visibility}`,
+          'Attacker has a valid Ethereum address',
+          'Function does not have hidden access checks',
+        ],
+        protectivePatterns: ['No access control modifiers detected', 'No msg.sender validation detected'],
+      };
+
       vulnerabilities.push({
         id: generateId('access-control'),
         type: 'access-control',
@@ -439,6 +569,10 @@ function detectAccessControl(contract: ContractInfo): Vulnerability[] {
         attackVector: `Any address can call ${func.name}() without authorization`,
         recommendation: 'Add an appropriate access control modifier (e.g., onlyOwner) to restrict who can call this function.',
         exploitable: true,
+        confidence: scoreToConfidenceLevel(score),
+        confidenceScore: Math.min(100, Math.max(0, score)),
+        confidenceFactors,
+        metadata,
       });
     }
   }
@@ -457,11 +591,12 @@ function extractVersion(pragma: string): { major: number; minor: number } | null
 function detectIntegerOverflow(contract: ContractInfo, pragmaVersion: string | null): Vulnerability[] {
   const vulnerabilities: Vulnerability[] = [];
 
-  if (pragmaVersion) {
-    const version = extractVersion(pragmaVersion);
-    if (version && version.minor >= 8) {
-      return []; // Solidity 0.8+ has built-in overflow checks
-    }
+  // Check if using Solidity 0.8+
+  const version = pragmaVersion ? extractVersion(pragmaVersion) : null;
+  const hasSolidity08Plus = version && version.minor >= 8;
+
+  if (hasSolidity08Plus) {
+    return []; // Solidity 0.8+ has built-in overflow checks
   }
 
   for (const func of contract.functions) {
@@ -469,21 +604,65 @@ function detectIntegerOverflow(contract: ContractInfo, pragmaVersion: string | n
 
     const ops = findArithmeticOperations(func.body);
     for (const op of ops) {
+      const isOverflow = op.type === '+' || op.type === '*';
+      const vulnType = isOverflow ? 'integer-overflow' : 'integer-underflow';
+
+      // Calculate confidence score
+      const confidenceFactors: string[] = [];
+      let score = 0; // Base score for overflow
+
+      // Solidity version is the primary factor
+      if (!pragmaVersion) {
+        score += 30;
+        confidenceFactors.push('Solidity version unknown - assuming vulnerable (+30)');
+      } else {
+        score += 50;
+        confidenceFactors.push(`Solidity ${pragmaVersion} lacks built-in overflow protection (+50)`);
+      }
+
+      // Multiplication and exponentiation are more dangerous
+      if (op.type === '*' || op.type === '**') {
+        score += 20;
+        confidenceFactors.push(`${op.type === '*' ? 'Multiplication' : 'Exponentiation'} can overflow quickly (+20)`);
+      } else {
+        score += 10;
+        confidenceFactors.push(`${op.type === '+' ? 'Addition' : 'Subtraction'} can overflow/underflow (+10)`);
+      }
+
+      const metadata: VulnerabilityMetadata = {
+        environment: 'Any EVM-compatible chain',
+        assumptions: [
+          'No SafeMath or similar library is being used',
+          'Input values are not validated before operation',
+          'Result is not checked for overflow after operation',
+        ],
+        preconditions: [
+          `Solidity version is ${pragmaVersion || 'unknown'} (< 0.8.0)`,
+          'Attacker can influence input values',
+          'No overflow validation exists',
+        ],
+        protectivePatterns: ['No SafeMath detected', 'No built-in overflow protection (Solidity < 0.8.0)'],
+      };
+
       vulnerabilities.push({
-        id: generateId(op.type === '+' || op.type === '*' ? 'integer-overflow' : 'integer-underflow'),
-        type: op.type === '+' || op.type === '*' ? 'integer-overflow' : 'integer-underflow',
+        id: generateId(vulnType),
+        type: vulnType,
         severity: 'HIGH',
-        title: `Potential integer ${op.type === '+' || op.type === '*' ? 'overflow' : 'underflow'} in ${func.name}()`,
-        description: `Arithmetic operation (${op.type}) at line ${op.line} may ${op.type === '+' || op.type === '*' ? 'overflow' : 'underflow'} in Solidity < 0.8.0.`,
+        title: `Potential integer ${isOverflow ? 'overflow' : 'underflow'} in ${func.name}()`,
+        description: `Arithmetic operation (${op.type}) at line ${op.line} may ${isOverflow ? 'overflow' : 'underflow'} in Solidity < 0.8.0.`,
         location: {
           line: op.line,
           column: 0,
           functionName: func.name,
           contractName: contract.name,
         },
-        attackVector: `Supply values that cause the operation to ${op.type === '+' || op.type === '*' ? 'overflow' : 'underflow'}`,
+        attackVector: `Supply values that cause the operation to ${isOverflow ? 'overflow' : 'underflow'}`,
         recommendation: 'Use SafeMath library or upgrade to Solidity 0.8.0+ which has built-in overflow checks.',
         exploitable: true,
+        confidence: scoreToConfidenceLevel(score),
+        confidenceScore: Math.min(100, Math.max(0, score)),
+        confidenceFactors,
+        metadata,
       });
     }
   }
@@ -588,6 +767,66 @@ contract AttackerContract {
 }`;
 }
 
+// ============= SAFETY CHECKS GENERATOR =============
+
+function generateSafetyChecks(parsed: ParsedContract, vulnerabilities: Vulnerability[]): SafetyCheck[] {
+  const checks: SafetyCheck[] = [];
+  const vulnTypes = new Set(vulnerabilities.map((v) => v.type));
+
+  // Check Solidity version for overflow protection
+  const version = parsed.pragmaVersion ? extractVersion(parsed.pragmaVersion) : null;
+  const hasSolidity08Plus = version && version.minor >= 8;
+
+  // Reentrancy check
+  if (!vulnTypes.has('reentrancy')) {
+    checks.push({
+      category: 'Reentrancy',
+      pattern: 'External calls before state updates',
+      status: 'safe',
+      reason: 'No external calls found before state variable updates. Contract follows Checks-Effects-Interactions pattern.',
+    });
+  }
+
+  // Access control check
+  if (!vulnTypes.has('access-control')) {
+    checks.push({
+      category: 'Access Control',
+      pattern: 'Sensitive functions without authorization',
+      status: 'safe',
+      reason: 'All sensitive functions have appropriate access control modifiers or msg.sender validation.',
+    });
+  }
+
+  // Integer overflow check
+  if (hasSolidity08Plus) {
+    checks.push({
+      category: 'Integer Overflow',
+      pattern: 'Arithmetic operations without bounds checking',
+      status: 'safe',
+      reason: `Using Solidity ${parsed.pragmaVersion} which has built-in overflow/underflow protection.`,
+    });
+  } else if (!vulnTypes.has('integer-overflow') && !vulnTypes.has('integer-underflow')) {
+    checks.push({
+      category: 'Integer Overflow',
+      pattern: 'Arithmetic operations without bounds checking',
+      status: 'safe',
+      reason: 'No arithmetic operations detected in vulnerable contexts.',
+    });
+  }
+
+  // Selfdestruct check
+  if (!vulnTypes.has('unprotected-selfdestruct')) {
+    checks.push({
+      category: 'Selfdestruct',
+      pattern: 'Unprotected selfdestruct calls',
+      status: 'safe',
+      reason: 'No unprotected selfdestruct or suicide calls detected.',
+    });
+  }
+
+  return checks;
+}
+
 // ============= MAIN ANALYZE FUNCTION =============
 
 export function analyzeContract(source: string): AnalysisResult {
@@ -598,6 +837,7 @@ export function analyzeContract(source: string): AnalysisResult {
   const contractName = primaryContract?.name || 'Unknown';
 
   const exploitCode = generateExploitCode(vulnerabilities, contractName);
+  const safetyChecks = generateSafetyChecks(parsed, vulnerabilities);
 
   return {
     contractName,
@@ -611,5 +851,7 @@ export function analyzeContract(source: string): AnalysisResult {
       low: vulnerabilities.filter((v) => v.severity === 'LOW').length,
       total: vulnerabilities.length,
     },
+    safetyChecks,
+    limitations: ANALYSIS_LIMITATIONS,
   };
 }

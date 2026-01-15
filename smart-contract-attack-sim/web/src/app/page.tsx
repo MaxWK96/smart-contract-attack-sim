@@ -4,6 +4,7 @@ import { useState } from 'react';
 import CodeEditor from '@/components/CodeEditor';
 import ResultsView from '@/components/ResultsView';
 import ExploitViewer from '@/components/ExploitViewer';
+import LimitationsSection from '@/components/LimitationsSection';
 import { AnalysisResult } from '@/lib/types';
 
 export default function Home() {
@@ -149,6 +150,7 @@ export default function Home() {
                 <ResultsView
                   vulnerabilities={result.vulnerabilities}
                   summary={result.summary}
+                  safetyChecks={result.safetyChecks}
                 />
 
                 {/* Exploit Code */}
@@ -158,6 +160,9 @@ export default function Home() {
                     contractName={result.contractName}
                   />
                 )}
+
+                {/* Limitations Section */}
+                <LimitationsSection limitations={result.limitations} />
               </>
             ) : (
               <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-8 text-center">
