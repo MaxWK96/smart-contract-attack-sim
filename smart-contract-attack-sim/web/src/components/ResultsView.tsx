@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { Vulnerability, Severity, ConfidenceLevel, SafetyCheck } from '@/lib/types';
+import FixSuggestions from './FixSuggestions';
+import EducationalWalkthrough from './EducationalWalkthrough';
 
 interface ResultsViewProps {
   vulnerabilities: Vulnerability[];
@@ -219,6 +221,20 @@ export default function ResultsView({ vulnerabilities, summary, safetyChecks }: 
                     <div className="text-xs text-gray-500">
                       <span className="font-medium">Environment:</span> {vuln.metadata.environment}
                     </div>
+
+                    {/* Fix Suggestions */}
+                    {vuln.fixSuggestions && vuln.fixSuggestions.length > 0 && (
+                      <div className="border-t border-gray-700/50 pt-4">
+                        <FixSuggestions suggestions={vuln.fixSuggestions} />
+                      </div>
+                    )}
+
+                    {/* Educational Walkthrough */}
+                    {vuln.educational && (
+                      <div className="border-t border-gray-700/50 pt-4">
+                        <EducationalWalkthrough content={vuln.educational} />
+                      </div>
+                    )}
 
                     {vuln.exploitable && (
                       <div className="flex items-center gap-2 text-sm">

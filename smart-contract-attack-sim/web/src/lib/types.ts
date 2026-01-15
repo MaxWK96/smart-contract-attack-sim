@@ -16,6 +16,35 @@ export interface VulnerabilityMetadata {
   protectivePatterns: string[];
 }
 
+export interface FixSuggestion {
+  name: string;
+  description: string;
+  vulnerableCode: string;
+  fixedCode: string;
+  gasImpact: string;
+  pros: string[];
+  cons: string[];
+  recommended: boolean;
+}
+
+export interface AttackStep {
+  step: number;
+  title: string;
+  description: string;
+  codeSnippet?: string;
+}
+
+export interface EducationalContent {
+  realWorldExample: {
+    name: string;
+    date: string;
+    impact: string;
+    description: string;
+  };
+  attackFlow: AttackStep[];
+  keyLesson: string;
+}
+
 export interface Vulnerability {
   id: string;
   type: VulnerabilityType;
@@ -30,6 +59,8 @@ export interface Vulnerability {
   confidenceScore: number;
   confidenceFactors: string[];
   metadata: VulnerabilityMetadata;
+  fixSuggestions?: FixSuggestion[];
+  educational?: EducationalContent;
 }
 
 export type VulnerabilityType =

