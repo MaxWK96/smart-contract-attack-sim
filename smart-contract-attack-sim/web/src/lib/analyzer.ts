@@ -1150,8 +1150,186 @@ function checkForMsgSenderRequire(body: unknown): boolean {
   return found;
 }
 
+// Check for if statements that guard execution based on msg.sender
+// This detects patterns like: if (msg.sender != admin) { revert; } or if (msg.sender == admin) { ... }
+function checkForIfSenderGuard(body: unknown): boolean {
+  if (!body) return false;
+  let found = false;
+
+  function traverse(node: unknown) {
+    if (!node || found) return;
+    const n = node as { type?: string; condition?: unknown; trueBody?: unknown; falseBody?: unknown };
+
+    // Check for if statements with msg.sender in condition
+    if (n.type === 'IfStatement' && n.condition) {
+      if (containsMsgSender(n.condition)) {
+        // Check if this is a guard pattern (revert, return, or contains the main logic)
+        const hasRevertOrReturn = checkForRevertOrReturn(n.trueBody) || checkForRevertOrReturn(n.falseBody);
+        if (hasRevertOrReturn || n.trueBody || n.falseBody) {
+          found = true;
+          return;
+        }
+      }
+    }
+
+    for (const key in n) {
+      const val = (n as Record<string, unknown>)[key];
+      if (val && typeof val === 'object') {
+        if (Array.isArray(val)) {
+          for (const child of val) traverse(child);
+        } else {
+          traverse(val);
+        }
+      }
+    }
+  }
+
+  traverse(body);
+  return found;
+}
+
+// Check if a body contains revert or return statements
+function checkForRevertOrReturn(body: unknown): boolean {
+  if (!body) return false;
+  let found = false;
+
+  function traverse(node: unknown) {
+    if (!node || found) return;
+    const n = node as { type?: string; expression?: unknown };
+
+    if (n.type === 'RevertStatement' || n.type === 'ReturnStatement') {
+      found = true;
+      return;
+    }
+
+    // Check for revert() function call
+    if (n.type === 'FunctionCall') {
+      const expr = n.expression as { type?: string; name?: string };
+      if (expr?.type === 'Identifier' && expr.name === 'revert') {
+        found = true;
+        return;
+      }
+    }
+
+    for (const key in n) {
+      const val = (n as Record<string, unknown>)[key];
+      if (val && typeof val === 'object') {
+        if (Array.isArray(val)) {
+          for (const child of val) traverse(child);
+        } else {
+          traverse(val);
+        }
+      }
+    }
+  }
+
+  traverse(body);
+  return found;
+}
+
+// Check if a contract is a proxy pattern (TransparentUpgradeableProxy, UUPS, etc.)
+function isProxyContract(contract: ContractInfo): boolean {
+  const contractNameLower = contract.name.toLowerCase();
+  const proxyPatterns = [
+    'proxy', 'upgradeable', 'transparent', 'uups', 'beacon',
+    'adminupgradeability', 'upgradeability', 'delegator'
+  ];
+
+  // Check contract name
+  if (proxyPatterns.some(p => contractNameLower.includes(p))) {
+    return true;
+  }
+
+  // Check for proxy-specific patterns
+  const hasImplementationSlot = contract.stateVariables.some(v =>
+    v.name.toLowerCase().includes('implementation') ||
+    v.name.toLowerCase().includes('_implementation')
+  );
+
+  const hasAdminSlot = contract.stateVariables.some(v =>
+    v.name.toLowerCase().includes('admin') ||
+    v.name.toLowerCase() === '_admin'
+  );
+
+  const hasFallbackWithDelegatecall = contract.functions.some(f =>
+    f.name === 'fallback' && checkForDelegatecall(f.body)
+  );
+
+  // Check for upgrade-related functions
+  const hasUpgradeFunctions = contract.functions.some(f =>
+    ['upgradeto', 'upgradetoandcall', 'setimplementation', '_upgradeto'].includes(f.name.toLowerCase())
+  );
+
+  return (hasImplementationSlot && (hasAdminSlot || hasFallbackWithDelegatecall)) || hasUpgradeFunctions;
+}
+
+// Check if function body contains delegatecall
+function checkForDelegatecall(body: unknown): boolean {
+  if (!body) return false;
+  let found = false;
+
+  function traverse(node: unknown) {
+    if (!node || found) return;
+    const n = node as { type?: string; expression?: unknown; memberName?: string };
+
+    if (n.type === 'FunctionCall') {
+      const expr = n.expression as { type?: string; memberName?: string };
+      if (expr?.type === 'MemberAccess' && expr.memberName === 'delegatecall') {
+        found = true;
+        return;
+      }
+    }
+
+    for (const key in n) {
+      const val = (n as Record<string, unknown>)[key];
+      if (val && typeof val === 'object') {
+        if (Array.isArray(val)) {
+          for (const child of val) traverse(child);
+        } else {
+          traverse(val);
+        }
+      }
+    }
+  }
+
+  traverse(body);
+  return found;
+}
+
+// Analyze a modifier definition to check if it validates msg.sender
+function modifierChecksMsgSender(contract: ContractInfo, modifierName: string): boolean {
+  // Find the modifier definition in the contract
+  const modifier = contract.modifiers.find(m => m.name === modifierName);
+  if (!modifier || !modifier.body) {
+    // If we can't find the modifier, check if it's a known access control modifier name
+    return isKnownAccessControlModifier(modifierName);
+  }
+
+  // Check if modifier body contains msg.sender checks
+  return checkForMsgSenderRequire(modifier.body) || checkForIfSenderGuard(modifier.body);
+}
+
+// Check if modifier name is a known access control pattern
+function isKnownAccessControlModifier(modifierName: string): boolean {
+  const modLower = modifierName.toLowerCase();
+  const knownPatterns = [
+    'onlyowner', 'onlyadmin', 'onlyrole', 'onlyauthorized', 'restricted',
+    'auth', 'authorized', 'requiresauth', 'onlygovernance', 'onlyminter',
+    'onlyoperator', 'onlymanager', 'whennotpaused', 'onlyproxy',
+    'ifadmin', 'ifowner', 'onlyproxyowner', 'onlyupgrader', 'onlydelegate',
+    'onlycontroller', 'onlyguardian', 'onlymultisig', 'onlytimelock',
+    'onlysuperadmin', 'onlywhitelisted', 'onlyallowed', 'requireadmin',
+    'requireowner', 'adminonly', 'owneronly', 'modifyadmin', 'notpaused'
+  ];
+
+  return knownPatterns.some(p => modLower.includes(p));
+}
+
 function detectAccessControl(contract: ContractInfo): Vulnerability[] {
   const vulnerabilities: Vulnerability[] = [];
+
+  // Check if this is a proxy contract - apply special handling
+  const isProxy = isProxyContract(contract);
 
   // Patterns indicating ownership/admin functions (CRITICAL severity)
   const ownershipPatterns = [
@@ -1173,10 +1351,18 @@ function detectAccessControl(contract: ContractInfo): Vulnerability[] {
     'initialize', 'init',
   ];
 
+  // EXPANDED: Known access control modifiers (including proxy patterns)
   const accessControlModifiers = [
+    // Standard patterns
     'onlyOwner', 'onlyAdmin', 'onlyRole', 'onlyAuthorized', 'restricted',
     'auth', 'authorized', 'requiresAuth', 'onlyGovernance', 'onlyMinter',
     'onlyOperator', 'onlyManager', 'whenNotPaused',
+    // Proxy-specific patterns (CRITICAL for USDC-like contracts)
+    'ifAdmin', 'ifOwner', 'onlyProxyOwner', 'onlyUpgrader', 'onlyDelegate',
+    'onlyProxy', 'onlyDelegateCall', 'onlyController', 'onlyGuardian',
+    'onlyMultisig', 'onlyTimelock', 'onlySuperAdmin', 'onlyWhitelisted',
+    'onlyAllowed', 'requireAdmin', 'requireOwner', 'adminOnly', 'ownerOnly',
+    'notPaused', 'modifyAdmin', 'checkRole', 'hasRole',
   ];
 
   for (const func of contract.functions) {
@@ -1210,13 +1396,36 @@ function detectAccessControl(contract: ContractInfo): Vulnerability[] {
     // Skip if no sensitive pattern found and no arbitrary ETH transfer
     if (!isOwnershipFunction && !isFundFunction && !isSensitiveFunction && !hasArbitraryEthTransfer) continue;
 
-    // Check for access control
-    const hasAccessControl = func.modifiers.some((mod) =>
+    // ============= ENHANCED ACCESS CONTROL DETECTION =============
+    // Check multiple protection mechanisms
+
+    // 1. Check for known access control modifiers
+    const hasKnownModifier = func.modifiers.some((mod) =>
       accessControlModifiers.some((ac) => mod.toLowerCase().includes(ac.toLowerCase()))
     );
+
+    // 2. Check for ANY modifier that might be custom access control
+    // Analyze if the modifier checks msg.sender
+    const hasCustomModifierWithCheck = func.modifiers.some(mod =>
+      modifierChecksMsgSender(contract, mod)
+    );
+
+    // 3. Check for require(msg.sender == ...) pattern
     const hasRequireSender = checkForMsgSenderRequire(func.body);
 
-    if (!hasAccessControl && !hasRequireSender) {
+    // 4. Check for if (msg.sender == ...) guard pattern
+    const hasIfSenderGuard = checkForIfSenderGuard(func.body);
+
+    // 5. For proxy contracts with modifiers, trust the modifier even if we can't analyze it
+    // (Proxy patterns like ifAdmin are designed to route non-admin calls to fallback)
+    const hasAnyModifier = func.modifiers.length > 0;
+    const proxyWithModifier = isProxy && hasAnyModifier;
+
+    // Combine all protection checks
+    const hasAccessControl = hasKnownModifier || hasCustomModifierWithCheck ||
+      hasRequireSender || hasIfSenderGuard || proxyWithModifier;
+
+    if (!hasAccessControl) {
       // Calculate confidence score
       const confidenceFactors: string[] = [];
       let score = 20; // Base score
@@ -1621,9 +1830,17 @@ function findUncheckedCalls(body: unknown): UncheckedCallInfo[] {
 function detectSelfdestruct(contract: ContractInfo): Vulnerability[] {
   const vulnerabilities: Vulnerability[] = [];
 
+  // Check if this is a proxy contract
+  const isProxy = isProxyContract(contract);
+
+  // EXPANDED: Known access control modifiers (same as access control detection)
   const accessControlModifiers = [
     'onlyOwner', 'onlyAdmin', 'onlyRole', 'onlyAuthorized', 'restricted',
     'auth', 'authorized', 'requiresAuth', 'onlyGovernance',
+    // Proxy-specific patterns
+    'ifAdmin', 'ifOwner', 'onlyProxyOwner', 'onlyUpgrader', 'onlyDelegate',
+    'onlyProxy', 'onlyDelegateCall', 'onlyController', 'onlyGuardian',
+    'onlyMultisig', 'onlyTimelock', 'onlySuperAdmin', 'onlyWhitelisted',
   ];
 
   for (const func of contract.functions) {
@@ -1634,13 +1851,32 @@ function detectSelfdestruct(contract: ContractInfo): Vulnerability[] {
     const hasSelfDestruct = containsSelfdestruct(func.body);
     if (!hasSelfDestruct) continue;
 
-    // Check for access control
-    const hasAccessControl = func.modifiers.some((mod) =>
+    // ============= ENHANCED ACCESS CONTROL DETECTION =============
+    // 1. Check for known access control modifiers
+    const hasKnownModifier = func.modifiers.some((mod) =>
       accessControlModifiers.some((ac) => mod.toLowerCase().includes(ac.toLowerCase()))
     );
+
+    // 2. Check for custom modifier that validates msg.sender
+    const hasCustomModifierWithCheck = func.modifiers.some(mod =>
+      modifierChecksMsgSender(contract, mod)
+    );
+
+    // 3. Check for require(msg.sender == ...) pattern
     const hasRequireSender = checkForMsgSenderRequire(func.body);
 
-    if (!hasAccessControl && !hasRequireSender) {
+    // 4. Check for if (msg.sender == ...) guard pattern
+    const hasIfSenderGuard = checkForIfSenderGuard(func.body);
+
+    // 5. For proxy contracts with modifiers, trust the modifier
+    const hasAnyModifier = func.modifiers.length > 0;
+    const proxyWithModifier = isProxy && hasAnyModifier;
+
+    // Combine all protection checks
+    const hasAccessControl = hasKnownModifier || hasCustomModifierWithCheck ||
+      hasRequireSender || hasIfSenderGuard || proxyWithModifier;
+
+    if (!hasAccessControl) {
       const confidenceFactors: string[] = [];
       let score = 30; // Base score
 
