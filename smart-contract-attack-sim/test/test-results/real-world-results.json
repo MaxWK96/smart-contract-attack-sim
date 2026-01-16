@@ -1,0 +1,110 @@
+{
+  "timestamp": "2026-01-16T23:51:07.294253",
+  "safe_contracts": [
+    {
+      "name": "WETH9",
+      "source": "Etherscan 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "status": "PASS",
+      "vulnerabilities": 0
+    },
+    {
+      "name": "OpenZeppelin ERC20 + Ownable",
+      "source": "OpenZeppelin Contracts v4.9.0",
+      "status": "PASS",
+      "vulnerabilities": 0
+    },
+    {
+      "name": "Uniswap V2 Pair",
+      "source": "Uniswap V2 Core",
+      "status": "PASS",
+      "vulnerabilities": 0
+    },
+    {
+      "name": "Gnosis Safe Multisig",
+      "source": "Gnosis Safe",
+      "status": "PASS",
+      "vulnerabilities": 0
+    },
+    {
+      "name": "Compound cToken",
+      "source": "Compound Finance",
+      "status": "PASS",
+      "vulnerabilities": 0
+    }
+  ],
+  "vulnerable_contracts": [
+    {
+      "name": "The DAO",
+      "source": "The DAO Hack (June 2016)",
+      "impact": "$60M stolen",
+      "status": "PASS",
+      "expected": [
+        "reentrancy"
+      ],
+      "detected": [
+        "reentrancy",
+        "access-control"
+      ]
+    },
+    {
+      "name": "Parity Multisig Library",
+      "source": "Parity Wallet (November 2017)",
+      "impact": "$280M frozen",
+      "status": "PASS",
+      "expected": [
+        "unprotected-selfdestruct",
+        "access-control"
+      ],
+      "detected": [
+        "unprotected-selfdestruct",
+        "access-control"
+      ]
+    },
+    {
+      "name": "King of the Ether",
+      "source": "King of Ether Throne (2016)",
+      "impact": "Game funds stuck",
+      "status": "PASS",
+      "expected": [
+        "unchecked-call"
+      ],
+      "detected": [
+        "unchecked-call",
+        "access-control"
+      ]
+    },
+    {
+      "name": "Rubixi",
+      "source": "Rubixi pyramid scheme",
+      "impact": "Creator takeover",
+      "status": "PASS",
+      "expected": [
+        "access-control"
+      ],
+      "detected": [
+        "access-control"
+      ]
+    },
+    {
+      "name": "SpankChain",
+      "source": "SpankChain (October 2018)",
+      "impact": "$40k stolen",
+      "status": "PASS",
+      "expected": [
+        "reentrancy"
+      ],
+      "detected": [
+        "reentrancy",
+        "access-control"
+      ]
+    }
+  ],
+  "summary": {
+    "safe_passed": 5,
+    "safe_failed": 0,
+    "vulnerable_passed": 5,
+    "vulnerable_failed": 0,
+    "false_positive_rate": "0/5",
+    "true_positive_rate": "5/5"
+  }
+}
