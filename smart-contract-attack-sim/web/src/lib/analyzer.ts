@@ -1296,17 +1296,11 @@ function checkForDelegatecall(body: unknown): boolean {
   return found;
 }
 
-// Analyze a modifier definition to check if it validates msg.sender
-function modifierChecksMsgSender(contract: ContractInfo, modifierName: string): boolean {
-  // Find the modifier definition in the contract
-  const modifier = contract.modifiers.find(m => m.name === modifierName);
-  if (!modifier || !modifier.body) {
-    // If we can't find the modifier, check if it's a known access control modifier name
-    return isKnownAccessControlModifier(modifierName);
-  }
-
-  // Check if modifier body contains msg.sender checks
-  return checkForMsgSenderRequire(modifier.body) || checkForIfSenderGuard(modifier.body);
+// Analyze a modifier to check if it validates msg.sender
+// Note: We use name-based heuristics since ModifierInfo doesn't include body analysis
+function modifierChecksMsgSender(_contract: ContractInfo, modifierName: string): boolean {
+  // Check if it's a known access control modifier by name pattern
+  return isKnownAccessControlModifier(modifierName);
 }
 
 // Check if modifier name is a known access control pattern
